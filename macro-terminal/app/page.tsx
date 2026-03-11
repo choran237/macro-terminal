@@ -269,6 +269,19 @@ function RangeBar({ value, low, high }: { value: number; low: number; high: numb
 type ChartMode = "3d" | "30d" | "6m";
 interface ChartPoint { t: number; o: number; h: number; l: number; c: number; v: number; }
 
+function niceStep(range: number, targetTicks: number): number {
+  const rough = range / targetTicks;
+  const mag   = Math.pow(10, Math.floor(Math.log10(rough)));
+  const norm  = rough / mag;
+  const nice  = norm < 1.5 ? 1 : norm < 3 ? 2 : norm < 7 ? 5 : 10;
+  return nice * mag;
+}
+
+function fmtAxisVal(v: number, step: number): string {
+  const decimals = step < 0.01 ? 4 : step < 0.1 ? 3 : step < 1 ? 2 : step < 10 ? 1 : 0;
+  return v.toFixed(decimals);
+}
+
 function drawChart(canvas: HTMLCanvasElement, points: ChartPoint[], simulated: boolean) {
   const ctx = canvas.getContext("2d");
   if (!ctx) return;
@@ -276,7 +289,7 @@ function drawChart(canvas: HTMLCanvasElement, points: ChartPoint[], simulated: b
   ctx.clearRect(0, 0, W, H);
 
   if (points.length === 0) {
-    ctx.fillStyle = "#5a80a0";
+    ctx.fillStyle = "#8aadcc";
     ctx.font = "12px 'Courier New', monospace";
     ctx.textAlign = "center";
     ctx.fillText(simulated ? "SIMULATED — NO REAL DATA FOR THIS INSTRUMENT" : "NO DATA AVAILABLE", W / 2, H / 2);
@@ -284,42 +297,60 @@ function drawChart(canvas: HTMLCanvasElement, points: ChartPoint[], simulated: b
   }
 
   const closes = points.map(p => p.c);
-  const minV = Math.min(...closes), maxV = Math.max(...closes);
-  const pad = { t: 18, b: 36, l: 62, r: 14 };
+  const dataMin = Math.min(...closes), dataMax = Math.max(...closes);
+  const pad = { t: 18, b: 36, l: 70, r: 14 };
   const cW = W - pad.l - pad.r, cH = H - pad.t - pad.b;
 
-  // Grid lines + Y labels
-  ctx.strokeStyle = "#0e1e2e";
-  ctx.lineWidth = 1;
-  for (let i = 0; i <= 5; i++) {
-    const y = pad.t + (i / 5) * cH;
-    ctx.beginPath(); ctx.moveTo(pad.l, y); ctx.lineTo(W - pad.r, y); ctx.stroke();
-    const val = maxV - (i / 5) * (maxV - minV);
-    ctx.fillStyle = "#5a80a0";
-    ctx.font = "10px 'Courier New', monospace";
-    ctx.textAlign = "right";
-    ctx.fillText(val < 10 ? val.toFixed(3) : val.toFixed(2), pad.l - 5, y + 3.5);
-  }
+  // ── Nice Y axis ticks ─────────────────────────────────────────────────────
+  const range = dataMax - dataMin || dataMax * 0.01;
+  const step  = niceStep(range, 6);
+  const axMin = Math.floor(dataMin / step) * step;
+  const axMax = Math.ceil(dataMax  / step) * step;
+  const ticks: number[] = [];
+  for (let v = axMin; v <= axMax + step * 0.001; v += step) ticks.push(parseFloat(v.toFixed(10)));
 
-  // X axis labels
-  const xCount = Math.min(4, points.length);
+  const toY = (v: number) => pad.t + (1 - (v - axMin) / (axMax - axMin)) * cH;
+  const toX = (i: number) => pad.l + (i / (Math.max(points.length - 1, 1))) * cW;
+
+  // Grid lines + Y labels
+  ticks.forEach(tick => {
+    const y = toY(tick);
+    if (y < pad.t - 2 || y > H - pad.b + 2) return;
+    // horizontal grid line
+    ctx.strokeStyle = "#162840";
+    ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(pad.l, y); ctx.lineTo(W - pad.r, y); ctx.stroke();
+    // vertical tick line from x-axis up — draw as subtle vertical at each tick x? No — user wants vertical lines at Y-axis marks going UP
+    // i.e. a full-height vertical line at the x positions corresponding to each y tick — actually user wants grid lines
+    // Re-reading: "whatever is marked on the y-axis, there should be a vertical line up" — they mean gridlines ARE the vertical lines
+    // Actually they mean: at each Y tick mark, draw a vertical line across the full chart width (which is what we're doing)
+    // Y label
+    ctx.fillStyle = "#7aadcc";
+    ctx.font = "11px 'Courier New', monospace";
+    ctx.textAlign = "right";
+    ctx.fillText(fmtAxisVal(tick, step), pad.l - 6, y + 3.5);
+  });
+
+  // X axis date labels
+  const xCount = Math.min(6, points.length);
   for (let i = 0; i < xCount; i++) {
     const idx = Math.floor((i / (xCount - 1)) * (points.length - 1));
-    const x = pad.l + (idx / (points.length - 1)) * cW;
-    const d = new Date(points[idx].t);
+    const x   = toX(idx);
+    const d   = new Date(points[idx].t);
     const lbl = `${d.getDate()}/${d.getMonth() + 1}`;
-    ctx.fillStyle = "#5a80a0";
-    ctx.font = "10px 'Courier New', monospace";
+    // vertical gridline at this x
+    ctx.strokeStyle = "#0e1e2e";
+    ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(x, pad.t); ctx.lineTo(x, H - pad.b); ctx.stroke();
+    ctx.fillStyle = "#7aadcc";
+    ctx.font = "11px 'Courier New', monospace";
     ctx.textAlign = "center";
     ctx.fillText(lbl, x, H - 6);
   }
 
-  const toY = (v: number) => pad.t + (1 - (v - minV) / (maxV - minV || 1)) * cH;
-  const toX = (i: number) => pad.l + (i / (points.length - 1)) * cW;
-
   // Gradient fill
   const grad = ctx.createLinearGradient(0, pad.t, 0, H - pad.b);
-  grad.addColorStop(0, "rgba(34,211,165,0.15)");
+  grad.addColorStop(0, "rgba(34,211,165,0.18)");
   grad.addColorStop(1, "rgba(34,211,165,0.01)");
   ctx.beginPath();
   closes.forEach((c, i) => i === 0 ? ctx.moveTo(toX(i), toY(c)) : ctx.lineTo(toX(i), toY(c)));
