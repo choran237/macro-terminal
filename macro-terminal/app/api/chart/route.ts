@@ -32,6 +32,7 @@ function getYahooSymbol(instrumentId: string): string | null {
 
 function modeToYahooParams(mode: string): { interval: string; range: string } {
   switch (mode) {
+    case "1d":  return { interval: "5m",  range: "1d"  };
     case "3d":  return { interval: "15m", range: "5d"  };
     case "30d": return { interval: "60m", range: "1mo" };
     case "6m":  return { interval: "1d",  range: "6mo" };
@@ -80,9 +81,13 @@ export async function GET(req: Request) {
     const lows: number[]        = result.indicators?.quote?.[0]?.low   ?? [];
     const volumes: number[]     = result.indicators?.quote?.[0]?.volume ?? [];
 
-    // For 3d mode, only keep last 3 trading days worth of bars
+    // Trim to relevant window
     let startIdx = 0;
-    if (mode === "3d" && timestamps.length > 0) {
+    if (mode === "1d" && timestamps.length > 0) {
+      const cutoff = Date.now() / 1000 - 1 * 24 * 60 * 60;
+      startIdx = timestamps.findIndex(t => t >= cutoff);
+      if (startIdx < 0) startIdx = 0;
+    } else if (mode === "3d" && timestamps.length > 0) {
       const cutoff = Date.now() / 1000 - 3 * 24 * 60 * 60;
       startIdx = timestamps.findIndex(t => t >= cutoff);
       if (startIdx < 0) startIdx = 0;

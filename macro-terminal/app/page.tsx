@@ -266,7 +266,7 @@ function RangeBar({ value, low, high }: { value: number; low: number; high: numb
 
 // ─── CHART MODAL ─────────────────────────────────────────────────────────────
 
-type ChartMode = "3d" | "30d" | "6m";
+type ChartMode = "1d" | "3d" | "30d" | "6m";
 interface ChartPoint { t: number; o: number; h: number; l: number; c: number; v: number; }
 
 function niceStep(range: number, targetTicks: number): number {
@@ -282,7 +282,7 @@ function fmtAxisVal(v: number, step: number): string {
   return v.toFixed(decimals);
 }
 
-function drawChart(canvas: HTMLCanvasElement, points: ChartPoint[], simulated: boolean) {
+function drawChart(canvas: HTMLCanvasElement, points: ChartPoint[], simulated: boolean, mode: ChartMode) {
   const ctx = canvas.getContext("2d");
   if (!ctx) return;
   const W = canvas.width, H = canvas.height;
@@ -298,7 +298,7 @@ function drawChart(canvas: HTMLCanvasElement, points: ChartPoint[], simulated: b
 
   const closes = points.map(p => p.c);
   const dataMin = Math.min(...closes), dataMax = Math.max(...closes);
-  const pad = { t: 18, b: 36, l: 70, r: 14 };
+  const pad = { t: 18, b: (mode === "1d" || mode === "3d") ? 48 : 36, l: 70, r: 14 };
   const cW = W - pad.l - pad.r, cH = H - pad.t - pad.b;
 
   // ── Nice Y axis ticks ─────────────────────────────────────────────────────
@@ -331,21 +331,30 @@ function drawChart(canvas: HTMLCanvasElement, points: ChartPoint[], simulated: b
     ctx.fillText(fmtAxisVal(tick, step), pad.l - 6, y + 3.5);
   });
 
-  // X axis date labels
+  // X axis date/time labels
+  const showTime = (mode === "1d" || mode === "3d");
   const xCount = Math.min(6, points.length);
   for (let i = 0; i < xCount; i++) {
     const idx = Math.floor((i / (xCount - 1)) * (points.length - 1));
     const x   = toX(idx);
     const d   = new Date(points[idx].t);
-    const lbl = `${d.getDate()}/${d.getMonth() + 1}`;
-    // vertical gridline at this x
+    const dateLbl = `${d.getDate()}/${d.getMonth() + 1}`;
+    const timeLbl = `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+    // vertical gridline
     ctx.strokeStyle = "#0e1e2e";
     ctx.lineWidth = 1;
     ctx.beginPath(); ctx.moveTo(x, pad.t); ctx.lineTo(x, H - pad.b); ctx.stroke();
-    ctx.fillStyle = "#7aadcc";
     ctx.font = "11px 'Courier New', monospace";
     ctx.textAlign = "center";
-    ctx.fillText(lbl, x, H - 6);
+    if (showTime) {
+      ctx.fillStyle = "#7aadcc";
+      ctx.fillText(dateLbl, x, H - 18);
+      ctx.fillStyle = "#5a80a0";
+      ctx.fillText(timeLbl, x, H - 5);
+    } else {
+      ctx.fillStyle = "#7aadcc";
+      ctx.fillText(dateLbl, x, H - 6);
+    }
   }
 
   // Gradient fill
@@ -377,7 +386,7 @@ function drawChart(canvas: HTMLCanvasElement, points: ChartPoint[], simulated: b
 }
 
 function ChartModal({ contract, onClose }: { contract: Contract; onClose: () => void }) {
-  const [mode, setMode] = useState<ChartMode>("30d");
+  const [mode, setMode] = useState<ChartMode>("1d");
   const [loading, setLoading] = useState(true);
   const [points, setPoints] = useState<ChartPoint[]>([]);
   const [simulated, setSimulated] = useState(false);
@@ -399,7 +408,7 @@ function ChartModal({ contract, onClose }: { contract: Contract; onClose: () => 
   // Draw whenever data or canvas changes
   useEffect(() => {
     if (!canvasRef.current || loading) return;
-    drawChart(canvasRef.current, points, simulated);
+    drawChart(canvasRef.current, points, simulated, mode);
   }, [points, simulated, loading]);
 
   return (
@@ -413,7 +422,7 @@ function ChartModal({ contract, onClose }: { contract: Contract; onClose: () => 
             {simulated && <span style={{ color: "#f0a500", fontSize: 10, border: "1px solid #f0a500", borderRadius: 2, padding: "1px 5px" }}>SIM</span>}
           </div>
           <div style={{ display: "flex", gap: 6 }}>
-            {(["3d", "30d", "6m"] as ChartMode[]).map(m => (
+            {(["1d", "3d", "30d", "6m"] as ChartMode[]).map(m => (
               <button key={m} onClick={() => setMode(m)} style={{ padding: "3px 10px", borderRadius: 3, border: `1px solid ${mode === m ? "#22d3a5" : "#172438"}`, background: mode === m ? "rgba(34,211,165,0.1)" : "transparent", color: mode === m ? "#22d3a5" : "#5a80a0", fontFamily: "'Courier New', monospace", fontSize: 11, cursor: "pointer", letterSpacing: 1 }}>
                 {m.toUpperCase()}
               </button>
