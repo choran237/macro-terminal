@@ -131,22 +131,42 @@ function useLivePrices(initial: DataStore) {
 
 // ─── SPARKLINE ────────────────────────────────────────────────────────────────
 
-function Sparkline({ seed, positive }: { seed: number; positive: boolean }) {
-  const pts: number[] = [];
-  let v = 50;
-  for (let i = 0; i < 32; i++) {
-    v += Math.sin(i * 0.38 + seed) * 2.5 + (Math.random() - 0.5) * 3.5;
-    v = Math.max(8, Math.min(92, v));
-    pts.push(v);
+// Global sparkline cache so we don't re-fetch on every render
+const sparklineCache: Record<string, number[]> = {};
+const pendingFetches = new Set<string>();
+
+function Sparkline({ contractId, positive }: { contractId: string; positive: boolean }) {
+  const [pts, setPts] = useState<number[]>(sparklineCache[contractId] ?? []);
+
+  useEffect(() => {
+    if (sparklineCache[contractId]) { setPts(sparklineCache[contractId]); return; }
+    if (pendingFetches.has(contractId)) return;
+    pendingFetches.add(contractId);
+    fetch(`/api/sparklines?ids=${contractId}`)
+      .then(r => r.json())
+      .then(d => {
+        const closes: number[] = d[contractId] ?? [];
+        sparklineCache[contractId] = closes;
+        setPts(closes);
+      })
+      .catch(() => {})
+      .finally(() => pendingFetches.delete(contractId));
+  }, [contractId]);
+
+  if (pts.length < 2) {
+    // Placeholder while loading
+    return <svg width={78} height={28} viewBox="0 0 78 28" style={{ display: "block" }}><line x1={0} y1={14} x2={78} y2={14} stroke="#1a2e42" strokeWidth={1} /></svg>;
   }
+
   const mn = Math.min(...pts), mx = Math.max(...pts);
-  const norm = pts.map(p => ((p - mn) / (mx - mn || 1)) * 26);
+  const norm = pts.map(p => ((p - mn) / (mx - mn || 1)) * 24);
   const path = norm
-    .map((y, i) => `${i === 0 ? "M" : "L"}${(i / (norm.length - 1)) * 78},${28 - y}`)
+    .map((y, i) => `${i === 0 ? "M" : "L"}${(i / (norm.length - 1)) * 78},${26 - y}`)
     .join(" ");
+  const color = positive ? "#22d3a5" : "#f45b5b";
   return (
     <svg width={78} height={28} viewBox="0 0 78 28" style={{ display: "block" }}>
-      <path d={path} fill="none" stroke={positive ? "#22d3a5" : "#f45b5b"} strokeWidth={1.4} strokeLinecap="round" strokeLinejoin="round" />
+      <path d={path} fill="none" stroke={color} strokeWidth={1.4} strokeLinecap="round" strokeLinejoin="round" />
     </svg>
   );
 }
@@ -422,7 +442,7 @@ function ContractRow({
       </td>
       {showTrend && (
         <td style={{ padding: "3px 8px" }}>
-          <Sparkline seed={contract.id.charCodeAt(0) * 3 + contract.id.charCodeAt(1)} positive={positive} />
+          <Sparkline contractId={contract.id} positive={positive} />
         </td>
       )}
     </tr>
