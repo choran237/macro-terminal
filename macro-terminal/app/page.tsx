@@ -125,10 +125,9 @@ function useLivePrices(initial: DataStore) {
         const chgPct = prevClose > 0 ? chgAbs / prevClose : 0;
 
         if (TREASURY_YIELD_IDS.has(id)) {
-          // Yahoo yields are stored ×10 in the close (42.78 = 4.278%)
-          const yld     = price    / 10;
-          const prevYld = prevClose / 10;
-          applyPrice(id, null, Math.round(yld*1000)/1000, Math.round((yld-prevYld)*1000)/1000, null, Math.round(high52/10*1000)/1000, Math.round(low52/10*1000)/1000);
+          // v8 chart closes already return the actual yield (e.g. 4.86), no scaling needed
+          const chgYld = price - prevClose;
+          applyPrice(id, null, Math.round(price*1000)/1000, Math.round(chgYld*1000)/1000, null, Math.round(high52*1000)/1000, Math.round(low52*1000)/1000);
         } else if (isFX(id)) {
           applyPrice(id, Math.round(price*100000)/100000, null, Math.round(chgAbs*100000)/100000, Math.round(chgAbs*100000)/100000, Math.round(high52*100000)/100000, Math.round(low52*100000)/100000);
         } else if (isCrypto(id)) {
@@ -192,10 +191,9 @@ function useLivePrices(initial: DataStore) {
   useEffect(() => {
     _applySparklinePrice = (id, last, prev) => {
       if (TREASURY_YIELD_IDS.has(id)) {
-        // Yahoo stores Treasury yields ×10 (48.6 = 4.86%)
-        const yld     = last / 10;
-        const prevYld = prev / 10;
-        applyPrice(id, null, Math.round(yld * 1000) / 1000, Math.round((yld - prevYld) * 1000) / 1000, null, yld * 1.1, yld * 0.9);
+        // v8 chart closes are already the actual yield value
+        const chgYld = last - prev;
+        applyPrice(id, null, Math.round(last * 1000) / 1000, Math.round(chgYld * 1000) / 1000, null, last * 1.1, last * 0.9);
       } else {
         const chgAbs = last - prev;
         const chgPct = prev > 0 ? chgAbs / prev : 0;
