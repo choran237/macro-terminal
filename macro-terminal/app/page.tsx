@@ -180,13 +180,13 @@ function RangeBar({ value, low, high }: { value: number; low: number; high: numb
   const hiLbl = isShort ? high.toFixed(3) : high.toFixed(0);
   return (
     <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
-      <span style={{ fontSize: 10, color: "#3d5a78", fontFamily: "monospace", width: 42, textAlign: "right" }}>{loLbl}</span>
+      <span style={{ fontSize: 10, color: "#5a80a0", fontFamily: "monospace", width: 42, textAlign: "right" }}>{loLbl}</span>
       <div style={{ flex: 1, height: 3, background: "#0e1e30", borderRadius: 2, position: "relative", minWidth: 56 }}>
         <div style={{ position: "absolute", inset: 0, width: `${pct}%`, background: "linear-gradient(90deg,#1a3d6e,#22d3a5)", borderRadius: 2 }} />
         <div style={{ position: "absolute", top: -2, left: `${pct}%`, width: 1.5, height: 7, background: "#e8f0f8", borderRadius: 1, transform: "translateX(-50%)" }} />
       </div>
-      <span style={{ fontSize: 10, color: "#3d5a78", fontFamily: "monospace", width: 42 }}>{hiLbl}</span>
-      <span style={{ fontSize: 10, color: "#5a7a9e", fontFamily: "monospace", width: 28, textAlign: "right" }}>{pct.toFixed(0)}%</span>
+      <span style={{ fontSize: 10, color: "#5a80a0", fontFamily: "monospace", width: 42 }}>{hiLbl}</span>
+      <span style={{ fontSize: 10, color: "#5a80a0", fontFamily: "monospace", width: 28, textAlign: "right" }}>{pct.toFixed(0)}%</span>
     </div>
   );
 }
@@ -203,7 +203,7 @@ function drawChart(canvas: HTMLCanvasElement, points: ChartPoint[], simulated: b
   ctx.clearRect(0, 0, W, H);
 
   if (points.length === 0) {
-    ctx.fillStyle = "#3d5a78";
+    ctx.fillStyle = "#5a80a0";
     ctx.font = "12px 'Courier New', monospace";
     ctx.textAlign = "center";
     ctx.fillText(simulated ? "SIMULATED — NO REAL DATA FOR THIS INSTRUMENT" : "NO DATA AVAILABLE", W / 2, H / 2);
@@ -222,7 +222,7 @@ function drawChart(canvas: HTMLCanvasElement, points: ChartPoint[], simulated: b
     const y = pad.t + (i / 5) * cH;
     ctx.beginPath(); ctx.moveTo(pad.l, y); ctx.lineTo(W - pad.r, y); ctx.stroke();
     const val = maxV - (i / 5) * (maxV - minV);
-    ctx.fillStyle = "#3d5a78";
+    ctx.fillStyle = "#5a80a0";
     ctx.font = "10px 'Courier New', monospace";
     ctx.textAlign = "right";
     ctx.fillText(val < 10 ? val.toFixed(3) : val.toFixed(2), pad.l - 5, y + 3.5);
@@ -235,7 +235,7 @@ function drawChart(canvas: HTMLCanvasElement, points: ChartPoint[], simulated: b
     const x = pad.l + (idx / (points.length - 1)) * cW;
     const d = new Date(points[idx].t);
     const lbl = `${d.getDate()}/${d.getMonth() + 1}`;
-    ctx.fillStyle = "#3d5a78";
+    ctx.fillStyle = "#5a80a0";
     ctx.font = "10px 'Courier New', monospace";
     ctx.textAlign = "center";
     ctx.fillText(lbl, x, H - 6);
@@ -305,16 +305,16 @@ function ChartModal({ contract, onClose }: { contract: Contract; onClose: () => 
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16 }}>
           <div style={{ display: "flex", alignItems: "baseline", gap: 10 }}>
             <span style={{ color: "#22d3a5", fontSize: 15, fontWeight: 700, letterSpacing: 3 }}>{contract.label}</span>
-            <span style={{ color: "#2e4a6a", fontSize: 11 }}>{contract.id}</span>
+            <span style={{ color: "#3a6888", fontSize: 11 }}>{contract.id}</span>
             {simulated && <span style={{ color: "#f0a500", fontSize: 10, border: "1px solid #f0a500", borderRadius: 2, padding: "1px 5px" }}>SIM</span>}
           </div>
           <div style={{ display: "flex", gap: 6 }}>
             {(["3d", "30d", "6m"] as ChartMode[]).map(m => (
-              <button key={m} onClick={() => setMode(m)} style={{ padding: "3px 10px", borderRadius: 3, border: `1px solid ${mode === m ? "#22d3a5" : "#172438"}`, background: mode === m ? "rgba(34,211,165,0.1)" : "transparent", color: mode === m ? "#22d3a5" : "#3d5a78", fontFamily: "'Courier New', monospace", fontSize: 11, cursor: "pointer", letterSpacing: 1 }}>
+              <button key={m} onClick={() => setMode(m)} style={{ padding: "3px 10px", borderRadius: 3, border: `1px solid ${mode === m ? "#22d3a5" : "#172438"}`, background: mode === m ? "rgba(34,211,165,0.1)" : "transparent", color: mode === m ? "#22d3a5" : "#5a80a0", fontFamily: "'Courier New', monospace", fontSize: 11, cursor: "pointer", letterSpacing: 1 }}>
                 {m.toUpperCase()}
               </button>
             ))}
-            <button onClick={onClose} style={{ padding: "3px 10px", borderRadius: 3, border: "1px solid #172438", background: "transparent", color: "#3d5a78", fontFamily: "'Courier New', monospace", fontSize: 11, cursor: "pointer" }}>✕</button>
+            <button onClick={onClose} style={{ padding: "3px 10px", borderRadius: 3, border: "1px solid #172438", background: "transparent", color: "#5a80a0", fontFamily: "'Courier New', monospace", fontSize: 11, cursor: "pointer" }}>✕</button>
           </div>
         </div>
 
@@ -339,8 +339,8 @@ function ChartModal({ contract, onClose }: { contract: Contract; onClose: () => 
             ["SOURCE", simulated ? "SIM" : "LIVE"],
           ].map(([k, v]) => (
             <div key={k} style={{ textAlign: "center" }}>
-              <div style={{ color: "#2e4a6a", fontSize: 9, letterSpacing: 1, marginBottom: 3 }}>{k}</div>
-              <div style={{ color: k === "SOURCE" ? (simulated ? "#f0a500" : "#22d3a5") : "#c8d8e8", fontSize: 12, fontFamily: "'Courier New', monospace" }}>{v}</div>
+              <div style={{ color: "#3a6888", fontSize: 9, letterSpacing: 1, marginBottom: 3 }}>{k}</div>
+              <div style={{ color: k === "SOURCE" ? (simulated ? "#f0a500" : "#22d3a5") : "#c8dff5", fontSize: 12, fontFamily: "'Courier New', monospace" }}>{v}</div>
             </div>
           ))}
         </div>
@@ -356,7 +356,7 @@ function TableHeader({ lookback, showTrend }: { lookback: string; showTrend: boo
     <th
       style={{
         padding: "3px 8px",
-        color: "#253a52",
+        color: "#3a6080",
         fontFamily: "'Courier New', monospace",
         fontSize: 10,
         textAlign: align,
@@ -423,15 +423,15 @@ function ContractRow({
     >
       {cell(
         <span style={{ display: "flex", alignItems: "center", gap: 5 }}>
-          <span style={{ color: "#a8c4de", fontWeight: 600 }}>{contract.label}</span>
+          <span style={{ color: "#c0d8f0", fontWeight: 600 }}>{contract.label}</span>
           {SIMULATED_IDS.has(contract.id) && (
             <span style={{ fontSize: 8, color: "#4a6a50", background: "rgba(34,100,60,0.18)", border: "1px solid #2a5a38", borderRadius: 2, padding: "0 3px", letterSpacing: 1 }}>SIM</span>
           )}
         </span>,
         "left"
       )}
-      {cell(<span style={{ color: "#d8e8f4" }}>{fmtPrice(contract)}</span>)}
-      {cell(<span style={{ color: "#8aaac8" }}>{fmtYield(contract)}</span>)}
+      {cell(<span style={{ color: "#e8f4ff" }}>{fmtPrice(contract)}</span>)}
+      {cell(<span style={{ color: "#8aadcc" }}>{fmtYield(contract)}</span>)}
       {cell(<span style={{ color: changeColor, fontWeight: 600 }}>{fmtChange(contract)}</span>)}
       <td style={{ padding: "5px 8px", minWidth: 200 }}>
         <RangeBar
@@ -474,10 +474,10 @@ function AssetGroup({
         onClick={() => setOpen(p => !p)}
         style={{ display: "flex", alignItems: "center", gap: 7, padding: "4px 14px", background: "#0a1624", borderBottom: "1px solid #0d1c2c", cursor: "pointer", userSelect: "none" }}
       >
-        <span style={{ color: "#3d5a78", fontSize: 9, display: "inline-block", transform: open ? "rotate(0deg)" : "rotate(-90deg)", transition: "transform 0.18s" }}>▾</span>
-        <span style={{ color: "#6a8aaa", fontSize: 11, letterSpacing: 2 }}>{group.label}</span>
-        <span style={{ color: "#1e3448", fontSize: 10, marginLeft: 3 }}>{group.currency}</span>
-        <span style={{ marginLeft: "auto", color: "#1e3448", fontSize: 10 }}>{group.contracts.length} INSTR</span>
+        <span style={{ color: "#5a80a0", fontSize: 9, display: "inline-block", transform: open ? "rotate(0deg)" : "rotate(-90deg)", transition: "transform 0.18s" }}>▾</span>
+        <span style={{ color: "#7aabcc", fontSize: 11, letterSpacing: 2 }}>{group.label}</span>
+        <span style={{ color: "#2e5070", fontSize: 10, marginLeft: 3 }}>{group.currency}</span>
+        <span style={{ marginLeft: "auto", color: "#2e5070", fontSize: 10 }}>{group.contracts.length} INSTR</span>
       </div>
       {open && (
         <table style={{ width: "100%", borderCollapse: "collapse" }}>
@@ -532,8 +532,8 @@ function TickerTape({ data }: { data: DataStore }) {
       <div style={{ display: "flex", animation: "ticker 80s linear infinite", whiteSpace: "nowrap" }}>
         {[...items, ...items].map((c, i) => (
           <span key={i} style={{ marginRight: 36, fontFamily: "'Courier New', monospace", fontSize: 11 }}>
-            <span style={{ color: "#3d5a78" }}>{c.label} </span>
-            <span style={{ color: "#b8cce0" }}>{fmtPrice(c) !== "—" ? fmtPrice(c) : fmtYield(c)} </span>
+            <span style={{ color: "#5a80a0" }}>{c.label} </span>
+            <span style={{ color: "#c8dff5" }}>{fmtPrice(c) !== "—" ? fmtPrice(c) : fmtYield(c)} </span>
             <span style={{ color: c.change >= 0 ? "#22d3a5" : "#f45b5b" }}>{fmtChange(c)}</span>
           </span>
         ))}
@@ -558,8 +558,8 @@ function Clocks() {
     <div style={{ display: "flex", gap: 14, alignItems: "center" }}>
       {[["LDN", "Europe/London"], ["NYC", "America/New_York"], ["TYO", "Asia/Tokyo"], ["UTC", "UTC"]].map(([label, zone]) => (
         <div key={zone} style={{ display: "flex", gap: 4, alignItems: "center" }}>
-          <span style={{ color: "#253a52", fontSize: 9, letterSpacing: 1 }}>{label}</span>
-          <span style={{ color: "#6a8aaa", fontSize: 11, fontFamily: "'Courier New', monospace" }}>{tz(zone)}</span>
+          <span style={{ color: "#3a6080", fontSize: 9, letterSpacing: 1 }}>{label}</span>
+          <span style={{ color: "#7aabcc", fontSize: 11, fontFamily: "'Courier New', monospace" }}>{tz(zone)}</span>
         </div>
       ))}
     </div>
@@ -618,7 +618,7 @@ export default function Dashboard() {
         <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
           <div style={{ width: 20, height: 20, background: "linear-gradient(135deg,#22d3a5 0%,#1a4a88 100%)", borderRadius: 4, flexShrink: 0 }} />
           <span style={{ color: "#22d3a5", fontSize: 13, fontWeight: 700, letterSpacing: 4 }}>MACRO</span>
-          <span style={{ color: "#1e3a5a", fontSize: 13, letterSpacing: 2 }}>TERMINAL</span>
+          <span style={{ color: "#4a7898", fontSize: 13, letterSpacing: 2 }}>TERMINAL</span>
         </div>
 
         <div style={{ width: 1, height: 22, background: "#0d1c2c" }} />
@@ -630,7 +630,7 @@ export default function Dashboard() {
           value={search}
           onChange={e => setSearch(e.target.value)}
           placeholder="⌕  SEARCH..."
-          style={{ background: "#0a1624", border: "1px solid #172438", borderRadius: 4, padding: "4px 10px", color: "#c8d8e8", fontFamily: "'Courier New', monospace", fontSize: 11, width: 180, outline: "none" }}
+          style={{ background: "#0a1624", border: "1px solid #172438", borderRadius: 4, padding: "4px 10px", color: "#c8dff5", fontFamily: "'Courier New', monospace", fontSize: 11, width: 180, outline: "none" }}
         />
 
         {/* lookback */}
@@ -639,7 +639,7 @@ export default function Dashboard() {
             <button
               key={l}
               onClick={() => setLookback(l)}
-              style={{ padding: "3px 8px", borderRadius: 3, border: `1px solid ${lookback === l ? "#22d3a5" : "#172438"}`, background: lookback === l ? "rgba(34,211,165,0.1)" : "transparent", color: lookback === l ? "#22d3a5" : "#3d5a78", fontFamily: "'Courier New', monospace", fontSize: 10, cursor: "pointer", letterSpacing: 1 }}
+              style={{ padding: "3px 8px", borderRadius: 3, border: `1px solid ${lookback === l ? "#22d3a5" : "#172438"}`, background: lookback === l ? "rgba(34,211,165,0.1)" : "transparent", color: lookback === l ? "#22d3a5" : "#5a80a0", fontFamily: "'Courier New', monospace", fontSize: 10, cursor: "pointer", letterSpacing: 1 }}
             >
               {l}
             </button>
@@ -649,7 +649,7 @@ export default function Dashboard() {
         {/* trend toggle */}
         <button
           onClick={() => setTrend(p => !p)}
-          style={{ padding: "3px 9px", borderRadius: 3, border: `1px solid ${showTrend ? "#22d3a5" : "#172438"}`, background: showTrend ? "rgba(34,211,165,0.08)" : "transparent", color: showTrend ? "#22d3a5" : "#3d5a78", fontFamily: "'Courier New', monospace", fontSize: 10, cursor: "pointer", letterSpacing: 1 }}
+          style={{ padding: "3px 9px", borderRadius: 3, border: `1px solid ${showTrend ? "#22d3a5" : "#172438"}`, background: showTrend ? "rgba(34,211,165,0.08)" : "transparent", color: showTrend ? "#22d3a5" : "#5a80a0", fontFamily: "'Courier New', monospace", fontSize: 10, cursor: "pointer", letterSpacing: 1 }}
         >
           TREND
         </button>
@@ -677,7 +677,7 @@ export default function Dashboard() {
           <button
             key={t.id}
             onClick={() => setTab(t.id)}
-            style={{ padding: "7px 14px", border: "none", borderBottom: `2px solid ${tab === t.id ? "#22d3a5" : "transparent"}`, background: "transparent", color: tab === t.id ? "#22d3a5" : "#3d5a78", fontFamily: "'Courier New', monospace", fontSize: 11, cursor: "pointer", letterSpacing: 2, transition: "color 0.15s" }}
+            style={{ padding: "7px 14px", border: "none", borderBottom: `2px solid ${tab === t.id ? "#22d3a5" : "transparent"}`, background: "transparent", color: tab === t.id ? "#22d3a5" : "#5a80a0", fontFamily: "'Courier New', monospace", fontSize: 11, cursor: "pointer", letterSpacing: 2, transition: "color 0.15s" }}
           >
             {t.label}
           </button>
@@ -687,7 +687,7 @@ export default function Dashboard() {
       {/* ── MAIN SCROLL AREA ── */}
       <div style={{ flex: 1, overflowY: "auto", overflowX: "auto" }}>
         {filtered.length === 0 ? (
-          <div style={{ padding: 48, textAlign: "center", color: "#1e3448", fontFamily: "'Courier New', monospace", fontSize: 13, letterSpacing: 2 }}>
+          <div style={{ padding: 48, textAlign: "center", color: "#2e5070", fontFamily: "'Courier New', monospace", fontSize: 13, letterSpacing: 2 }}>
             NO INSTRUMENTS MATCH
           </div>
         ) : (
@@ -703,13 +703,13 @@ export default function Dashboard() {
           {dataSource === "live" ? "● YAHOO FINANCE · 15 MIN DELAY" : "● CONNECTING TO YAHOO FINANCE..."}
         </span>
         <span style={{ color: "#0d1c2c" }}>|</span>
-        <span style={{ color: "#1e3448", fontSize: 9 }}>SIM = SIMULATED (SWAPS · RATE FUTURES · TTF)</span>
+        <span style={{ color: "#2e5070", fontSize: 9 }}>SIM = SIMULATED (SWAPS · RATE FUTURES · TTF)</span>
         <span style={{ color: "#0d1c2c" }}>|</span>
-        <span style={{ color: "#1e3448", fontSize: 9 }}>INSTRUMENTS: {totalInstruments}</span>
+        <span style={{ color: "#2e5070", fontSize: 9 }}>INSTRUMENTS: {totalInstruments}</span>
         <span style={{ color: "#0d1c2c" }}>|</span>
-        <span style={{ color: "#1e3448", fontSize: 9 }}>CLICK ANY ROW TO CHART</span>
+        <span style={{ color: "#2e5070", fontSize: 9 }}>CLICK ANY ROW TO CHART</span>
         <div style={{ flex: 1 }} />
-        <span style={{ color: "#1a2e44", fontSize: 9 }}>MACRO TERMINAL · FOR INFORMATIONAL USE ONLY</span>
+        <span style={{ color: "#2e5070", fontSize: 9 }}>MACRO TERMINAL · FOR INFORMATIONAL USE ONLY</span>
       </div>
 
       {/* ── CHART MODAL ── */}

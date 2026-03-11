@@ -84,23 +84,28 @@ export async function GET() {
     if (result.status !== "fulfilled" || !result.value) return;
     const q = result.value;
 
-    const price: number    = q.c;
+    const price: number     = q.c;
     const prevClose: number = q.pc;
     const changeAbs: number = q.d  ?? (price - prevClose);
     const changePct: number = q.dp != null ? q.dp / 100 : (prevClose > 0 ? changeAbs / prevClose : 0);
 
-    // For FX we need 52w hi/lo — Finnhub basic quote doesn't include it,
-    // so we approximate from the day's range scaled — will be refined by Yahoo fallback
-    const high52 = q.h * 1.08;
-    const low52  = q.l * 0.92;
-
     const isFX     = sym.startsWith("OANDA:");
     const isCrypto = sym.startsWith("BINANCE:");
+    const isIndex  = sym.startsWith("^");
+
+    // Approximate 52w range from intraday range (Finnhub free tier has no 52w field)
+    const high52 = q.h ? q.h * 1.08 : price * 1.08;
+    const low52  = q.l ? q.l * 0.92 : price * 0.92;
+
+    // change semantics must match fmtChange in format.ts:
+    //   FX      → absolute pip change (q.d); fmtChange shows raw value
+    //   equity/index/crypto → decimal fraction (dp/100); fmtChange multiplies by 100
+    const changeForStore = isFX ? changeAbs : changePct;
 
     priceMap[id] = {
-      price:     parseFloat(price.toFixed(isFX ? 5 : isCrypto ? 2 : 4)),
+      price:     parseFloat(price.toFixed(isFX ? 5 : isCrypto ? 0 : isIndex ? 2 : 4)),
       yield:     null,
-      change:    parseFloat(changePct.toFixed(6)),
+      change:    parseFloat(changeForStore.toFixed(isFX ? 5 : 6)),
       changeAbs: parseFloat(changeAbs.toFixed(isFX ? 5 : 2)),
       high52:    parseFloat(high52.toFixed(isFX ? 5 : 2)),
       low52:     parseFloat(low52.toFixed(isFX ? 5 : 2)),
