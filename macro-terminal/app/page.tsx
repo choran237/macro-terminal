@@ -38,6 +38,12 @@ function deepClone<T>(x: T): T {
 // Instruments not covered by Yahoo keep their previous value and get a
 // lightweight random simulation so the UI never looks frozen.
 
+// Module-level so Sparkline can call it without prop-drilling
+let _applySparklinePrice: ((id: string, last: number, prev: number) => void) | null = null;
+function onPriceUpdate(id: string, last: number, prev: number) {
+  _applySparklinePrice?.(id, last, prev);
+}
+
 function useLivePrices(initial: DataStore) {
   const [data, setData]       = useState<DataStore>(deepClone(initial));
   const [flashes, setFlashes] = useState<Record<string, "up" | "down">>({});
@@ -182,6 +188,17 @@ function useLivePrices(initial: DataStore) {
     return () => clearInterval(id);
   }, []);
 
+  // Register so Sparkline can call applyPrice without prop drilling
+  useEffect(() => {
+    _applySparklinePrice = (id, last, prev) => {
+      const chgAbs = last - prev;
+      const chgPct = prev > 0 ? chgAbs / prev : 0;
+      applyPrice(id, Math.round(last * 100) / 100, null, chgPct, Math.round(chgAbs * 100) / 100, last * 1.1, last * 0.9);
+      setDataSource("live");
+    };
+    return () => { _applySparklinePrice = null; };
+  }, []);
+
   return { data, flashes, dataSource };
 }
 // ─── SPARKLINE ────────────────────────────────────────────────────────────────
@@ -190,11 +207,11 @@ function useLivePrices(initial: DataStore) {
 const sparklineCache: Record<string, number[]> = {};
 const pendingFetches = new Set<string>();
 
-function Sparkline({ contractId, positive }: { contractId: string; positive: boolean }) {
+function Sparkline({ contractId, positive, onPrice }: { contractId: string; positive: boolean; onPrice?: (closes: number[]) => void }) {
   const [pts, setPts] = useState<number[]>(sparklineCache[contractId] ?? []);
 
   useEffect(() => {
-    if (sparklineCache[contractId]) { setPts(sparklineCache[contractId]); return; }
+    if (sparklineCache[contractId]) { setPts(sparklineCache[contractId]); onPrice?.(sparklineCache[contractId]); return; }
     if (pendingFetches.has(contractId)) return;
     pendingFetches.add(contractId);
     fetch(`/api/sparklines?ids=${contractId}`)
@@ -203,6 +220,7 @@ function Sparkline({ contractId, positive }: { contractId: string; positive: boo
         const closes: number[] = d[contractId] ?? [];
         sparklineCache[contractId] = closes;
         setPts(closes);
+        onPrice?.(closes);
       })
       .catch(() => {})
       .finally(() => pendingFetches.delete(contractId));
@@ -497,7 +515,12 @@ function ContractRow({
       </td>
       {showTrend && (
         <td style={{ padding: "3px 8px" }}>
-          <Sparkline contractId={contract.id} positive={positive} />
+          <Sparkline contractId={contract.id} positive={positive} onPrice={(closes) => {
+            if (closes.length === 0) return;
+            const last = closes[closes.length - 1];
+            const prev = closes.length > 1 ? closes[closes.length - 2] : last;
+            onPriceUpdate(contract.id, last, prev);
+          }} />
         </td>
       )}
     </tr>
