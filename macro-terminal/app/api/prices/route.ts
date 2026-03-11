@@ -1,122 +1,140 @@
 import { NextResponse } from "next/server";
-import yahooFinance from "yahoo-finance2";
 import { YAHOO_SYMBOLS, SIMULATED_IDS } from "../../data/symbols";
 
 export const runtime = "nodejs";
 
-// Cache results for 60 seconds to avoid hammering Yahoo
+// ── In-memory cache — 60 s TTL ───────────────────────────────────────────────
 let cache: { data: PriceMap; ts: number } | null = null;
 const CACHE_TTL_MS = 60_000;
 
 export interface YahooPriceResult {
-  price: number | null;
-  yield: number | null;
-  change: number;          // pct change from prev close (as decimal 0.01 = 1%)
+  price:     number | null;
+  yield:     number | null;
+  change:    number;
   changeAbs: number | null;
-  high52: number;
-  low52: number;
+  high52:    number;
+  low52:     number;
   simulated: boolean;
 }
-
 export type PriceMap = Record<string, YahooPriceResult>;
 
-// Treasury yield tickers return yield directly as the "price"
+// Treasury yield tickers — Yahoo quotes these as e.g. 42.78 meaning 4.278 %
 const YIELD_IDS = new Set(["UST_5Y", "UST_10Y", "UST_30Y"]);
 
-// Instruments where Yahoo price IS the yield (bond ETFs use NAV, not yield)
+// Bond ETFs — show NAV price, no yield field
 const BOND_ETF_IDS = new Set([
   "BUND_2Y","BUND_5Y","BUND_10Y","BUND_30Y",
   "GILT_2Y","GILT_5Y","GILT_10Y","GILT_30Y",
   "BTP_10Y",
 ]);
 
-async function fetchYahoo(symbols: string[]): Promise<Record<string, any>> {
+// ── Fetch a batch of symbols from Yahoo Finance v8 (no library) ──────────────
+async function fetchYahooBatch(symbols: string[]): Promise<Record<string, any>> {
   if (symbols.length === 0) return {};
-  try {
-    // yahoo-finance2 quoteSummary is more reliable than quote for batch
-    const results = await yahooFinance.quote(symbols, {}, { validateResult: false });
-    const map: Record<string, any> = {};
-    if (Array.isArray(results)) {
-      results.forEach(r => { if (r?.symbol) map[r.symbol] = r; });
-    } else if (results?.symbol) {
-      map[(results as any).symbol] = results;
-    }
-    return map;
-  } catch (e) {
-    console.error("Yahoo fetch error:", e);
+
+  const joined = symbols.map(encodeURIComponent).join("%2C");
+  const url =
+    `https://query1.finance.yahoo.com/v7/finance/quote?symbols=${joined}` +
+    `&fields=regularMarketPrice,regularMarketPreviousClose,regularMarketChange,` +
+    `regularMarketChangePercent,fiftyTwoWeekHigh,fiftyTwoWeekLow`;
+
+  const res = await fetch(url, {
+    headers: {
+      // Mimic a browser request so Yahoo doesn't reject it
+      "User-Agent":
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
+        "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+      "Accept": "application/json",
+      "Accept-Language": "en-US,en;q=0.9",
+    },
+    next: { revalidate: 0 }, // don't use Next.js cache — we manage it ourselves
+  });
+
+  if (!res.ok) {
+    console.warn(`Yahoo batch fetch failed: ${res.status} ${res.statusText}`);
     return {};
   }
+
+  const json = await res.json();
+  const quotes: any[] = json?.quoteResponse?.result ?? [];
+  const map: Record<string, any> = {};
+  quotes.forEach((q: any) => { if (q?.symbol) map[q.symbol] = q; });
+  return map;
 }
 
+// ── API route ────────────────────────────────────────────────────────────────
 export async function GET() {
-  // Return cache if fresh
+  // Serve cache if still fresh
   if (cache && Date.now() - cache.ts < CACHE_TTL_MS) {
     return NextResponse.json(cache.data, {
       headers: { "Cache-Control": "public, max-age=60" },
     });
   }
 
-  // Build list of Yahoo symbols to fetch (deduplicated)
+  // Instruments we actually want to fetch (exclude simulated ones)
   const idToYahoo = Object.entries(YAHOO_SYMBOLS).filter(
     ([id]) => !SIMULATED_IDS.has(id)
   );
-  const uniqueYahooSymbols = [...new Set(idToYahoo.map(([, y]) => y))];
+  const uniqueSymbols = [...new Set(idToYahoo.map(([, sym]) => sym))];
 
-  // Fetch in batches of 20 to be safe
-  const BATCH = 20;
+  // Fetch in batches of 25
+  const BATCH = 25;
   const yahooData: Record<string, any> = {};
-  for (let i = 0; i < uniqueYahooSymbols.length; i += BATCH) {
-    const batch = uniqueYahooSymbols.slice(i, i + BATCH);
-    const result = await fetchYahoo(batch);
-    Object.assign(yahooData, result);
+  for (let i = 0; i < uniqueSymbols.length; i += BATCH) {
+    try {
+      const batch = uniqueSymbols.slice(i, i + BATCH);
+      const result = await fetchYahooBatch(batch);
+      Object.assign(yahooData, result);
+    } catch (e) {
+      console.error("Yahoo batch error:", e);
+    }
   }
 
-  // Build output map keyed by our instrument ID
+  // Map Yahoo responses back to our instrument IDs
   const priceMap: PriceMap = {};
 
   for (const [id, yahooSymbol] of idToYahoo) {
     const q = yahooData[yahooSymbol];
     if (!q) continue;
 
-    const rawPrice: number = q.regularMarketPrice ?? 0;
-    const prevClose: number = q.regularMarketPreviousClose ?? rawPrice;
-    const high52: number = q.fiftyTwoWeekHigh ?? rawPrice * 1.1;
-    const low52: number = q.fiftyTwoWeekLow ?? rawPrice * 0.9;
-    const changeAbs: number = q.regularMarketChange ?? 0;
+    const rawPrice: number  = q.regularMarketPrice          ?? 0;
+    const prevClose: number = q.regularMarketPreviousClose  ?? rawPrice;
+    const high52: number    = q.fiftyTwoWeekHigh            ?? rawPrice * 1.1;
+    const low52: number     = q.fiftyTwoWeekLow             ?? rawPrice * 0.9;
+    const changeAbs: number = q.regularMarketChange         ?? 0;
     const changePct: number = prevClose > 0 ? changeAbs / prevClose : 0;
 
     if (YIELD_IDS.has(id)) {
-      // Treasury yield tickers: price field IS the yield in %
-      const yieldVal = rawPrice / 10; // ^TNX quotes as e.g. 42.78 meaning 4.278%
+      // ^TNX etc. quote yield × 10, e.g. 42.78 = 4.278 %
+      const yieldVal  = rawPrice  / 10;
       const prevYield = prevClose / 10;
       priceMap[id] = {
-        price: null,
-        yield: parseFloat(yieldVal.toFixed(3)),
-        change: parseFloat((yieldVal - prevYield).toFixed(3)), // bp-style change
+        price:     null,
+        yield:     parseFloat(yieldVal.toFixed(3)),
+        change:    parseFloat((yieldVal - prevYield).toFixed(3)),
         changeAbs: null,
-        high52: parseFloat((high52 / 10).toFixed(3)),
-        low52: parseFloat((low52 / 10).toFixed(3)),
+        high52:    parseFloat((high52 / 10).toFixed(3)),
+        low52:     parseFloat((low52  / 10).toFixed(3)),
         simulated: false,
       };
     } else if (BOND_ETF_IDS.has(id)) {
-      // Bond ETFs: show ETF price, no yield
       priceMap[id] = {
-        price: parseFloat(rawPrice.toFixed(3)),
-        yield: null,
-        change: parseFloat(changePct.toFixed(5)),
+        price:     parseFloat(rawPrice.toFixed(3)),
+        yield:     null,
+        change:    parseFloat(changePct.toFixed(5)),
         changeAbs: parseFloat(changeAbs.toFixed(3)),
-        high52: parseFloat(high52.toFixed(3)),
-        low52: parseFloat(low52.toFixed(3)),
+        high52:    parseFloat(high52.toFixed(3)),
+        low52:     parseFloat(low52.toFixed(3)),
         simulated: false,
       };
     } else {
       priceMap[id] = {
-        price: parseFloat(rawPrice.toFixed(5)),
-        yield: null,
-        change: parseFloat(changePct.toFixed(6)),
+        price:     parseFloat(rawPrice.toFixed(5)),
+        yield:     null,
+        change:    parseFloat(changePct.toFixed(6)),
         changeAbs: parseFloat(changeAbs.toFixed(4)),
-        high52: parseFloat(high52.toFixed(5)),
-        low52: parseFloat(low52.toFixed(5)),
+        high52:    parseFloat(high52.toFixed(5)),
+        low52:     parseFloat(low52.toFixed(5)),
         simulated: false,
       };
     }
