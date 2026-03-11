@@ -75,7 +75,7 @@ export async function GET() {
   const idToYahoo = Object.entries(YAHOO_SYMBOLS).filter(
     ([id]) => !SIMULATED_IDS.has(id)
   );
-  const uniqueSymbols = [...new Set(idToYahoo.map(([, sym]) => sym))];
+  const uniqueSymbols = Array.from(new Set(idToYahoo.map(([, sym]) => sym)));
 
   // Fetch in batches of 25
   const BATCH = 25;
