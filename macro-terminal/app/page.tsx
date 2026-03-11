@@ -191,9 +191,16 @@ function useLivePrices(initial: DataStore) {
   // Register so Sparkline can call applyPrice without prop drilling
   useEffect(() => {
     _applySparklinePrice = (id, last, prev) => {
-      const chgAbs = last - prev;
-      const chgPct = prev > 0 ? chgAbs / prev : 0;
-      applyPrice(id, Math.round(last * 100) / 100, null, chgPct, Math.round(chgAbs * 100) / 100, last * 1.1, last * 0.9);
+      if (TREASURY_YIELD_IDS.has(id)) {
+        // Yahoo stores Treasury yields ×10 (48.6 = 4.86%)
+        const yld     = last / 10;
+        const prevYld = prev / 10;
+        applyPrice(id, null, Math.round(yld * 1000) / 1000, Math.round((yld - prevYld) * 1000) / 1000, null, yld * 1.1, yld * 0.9);
+      } else {
+        const chgAbs = last - prev;
+        const chgPct = prev > 0 ? chgAbs / prev : 0;
+        applyPrice(id, Math.round(last * 100) / 100, null, chgPct, Math.round(chgAbs * 100) / 100, last * 1.1, last * 0.9);
+      }
       setDataSource("live");
     };
     return () => { _applySparklinePrice = null; };
