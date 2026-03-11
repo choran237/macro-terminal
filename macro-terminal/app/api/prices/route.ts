@@ -21,161 +21,172 @@ export interface PriceResult {
 }
 export type PriceMap = Record<string, PriceResult>;
 
-// ── Cache ─────────────────────────────────────────────────────────────────────
 let cache: { data: PriceMap; ts: number } | null = null;
 const CACHE_TTL_MS = 60_000;
 
-// ── Finnhub: fetch a single quote ─────────────────────────────────────────────
+// ── Finnhub single stock quote ────────────────────────────────────────────────
 async function fetchFinnhubQuote(symbol: string, apiKey: string): Promise<any> {
-  const url = `https://finnhub.io/api/v1/quote?symbol=${encodeURIComponent(symbol)}&token=${apiKey}`;
-  const res = await fetch(url, { next: { revalidate: 0 } });
-  if (!res.ok) return null;
-  const data = await res.json();
-  // Finnhub returns { c: current, d: change, dp: changePct, h: high, l: low, o: open, pc: prevClose }
-  if (!data?.c || data.c === 0) return null;
-  return data;
+  try {
+    const res = await fetch(
+      `https://finnhub.io/api/v1/quote?symbol=${encodeURIComponent(symbol)}&token=${apiKey}`,
+      { next: { revalidate: 0 } }
+    );
+    if (!res.ok) return null;
+    const d = await res.json();
+    if (!d?.c || d.c === 0) return null;
+    return d;
+  } catch { return null; }
 }
 
-// ── Yahoo Finance: fetch a batch of quotes ────────────────────────────────────
-async function fetchYahooBatch(symbols: string[]): Promise<Record<string, any>> {
-  if (symbols.length === 0) return {};
-  const joined = symbols.map(encodeURIComponent).join("%2C");
-  const url =
-    `https://query1.finance.yahoo.com/v7/finance/quote?symbols=${joined}` +
-    `&fields=regularMarketPrice,regularMarketPreviousClose,regularMarketChange,` +
-    `regularMarketChangePercent,fiftyTwoWeekHigh,fiftyTwoWeekLow`;
+// ── Yahoo v8 chart — single symbol, 5d range, 1d interval ────────────────────
+// This is the same endpoint the chart modal uses — proven to work through Vercel.
+// Returns { price, prevClose, high52, low52 } or null.
+async function fetchYahooQuote(symbol: string): Promise<{
+  price: number; prevClose: number; high52: number; low52: number;
+} | null> {
   try {
+    const url =
+      `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}` +
+      `?interval=1d&range=5d&includePrePost=false`;
     const res = await fetch(url, {
       headers: {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
         "Accept": "application/json",
       },
       next: { revalidate: 0 },
     });
-    if (!res.ok) return {};
+    if (!res.ok) return null;
     const json = await res.json();
-    const quotes: any[] = json?.quoteResponse?.result ?? [];
-    const map: Record<string, any> = {};
-    quotes.forEach((q: any) => { if (q?.symbol) map[q.symbol] = q; });
-    return map;
-  } catch {
-    return {};
-  }
+    const result = json?.chart?.result?.[0];
+    if (!result) return null;
+
+    const meta    = result.meta ?? {};
+    const closes: number[] = (result.indicators?.quote?.[0]?.close ?? []).filter((c: any) => c != null);
+    if (closes.length === 0) return null;
+
+    const price     = meta.regularMarketPrice ?? closes[closes.length - 1];
+    const prevClose = meta.chartPreviousClose ?? meta.previousClose ?? closes[closes.length - 2] ?? price;
+    const high52    = meta.fiftyTwoWeekHigh   ?? price * 1.1;
+    const low52     = meta.fiftyTwoWeekLow    ?? price * 0.9;
+
+    return { price, prevClose, high52, low52 };
+  } catch { return null; }
 }
 
-// ── Main route ────────────────────────────────────────────────────────────────
+// ── Classify by instrument ID ─────────────────────────────────────────────────
+function classify(id: string) {
+  return {
+    isFX:        ["EURUSD","GBPUSD","USDJPY","USDCHF","AUDUSD","USDCAD","NZDUSD","EURGBP"].includes(id),
+    isCrypto:    ["BTC","ETH"].includes(id),
+    isIndex:     ["SPX","NDX","DJIA","SX5E","UKX","NKY","KOSPI","MSCI"].includes(id),
+    isEquity:    ["NVDA","AAPL","MSFT","AMZN","GOOGL","META","TSLA"].includes(id),
+    isCommodity: ["CL2","GC","SI","HG"].includes(id),
+    isTreasury:  TREASURY_YIELD_IDS.has(id),
+    isBondETF:   BOND_ETF_IDS.has(id),
+  };
+}
+
 export async function GET() {
   if (cache && Date.now() - cache.ts < CACHE_TTL_MS) {
     return NextResponse.json(cache.data, { headers: { "Cache-Control": "public, max-age=60" } });
   }
 
-  const apiKey = process.env.FINNHUB_API_KEY ?? "";
+  const apiKey   = process.env.FINNHUB_API_KEY ?? "";
   const priceMap: PriceMap = {};
 
-  // ── 1. Finnhub — fetch all symbols concurrently ──────────────────────────
-  // Free tier rate limit: 60 calls/min — we have ~20 symbols so fine
-  const finnhubEntries = Object.entries(FINNHUB_SYMBOLS);
-  const finnhubResults = await Promise.allSettled(
-    finnhubEntries.map(([, sym]) => fetchFinnhubQuote(sym, apiKey))
-  );
-
-  finnhubEntries.forEach(([id, sym], i) => {
-    const result = finnhubResults[i];
-    if (result.status !== "fulfilled" || !result.value) return;
-    const q = result.value;
-
-    const price: number     = q.c;
-    const prevClose: number = q.pc;
-    const changeAbs: number = q.d  ?? (price - prevClose);
-    const changePct: number = q.dp != null ? q.dp / 100 : (prevClose > 0 ? changeAbs / prevClose : 0);
-
-    const isFX     = sym.startsWith("OANDA:");
-    const isCrypto = sym.startsWith("BINANCE:");
-    const isIndex  = sym.startsWith("^");
-
-    // Approximate 52w range from intraday range (Finnhub free tier has no 52w field)
-    const high52 = q.h ? q.h * 1.08 : price * 1.08;
-    const low52  = q.l ? q.l * 0.92 : price * 0.92;
-
-    // change semantics must match fmtChange in format.ts:
-    //   FX      → absolute pip change (q.d); fmtChange shows raw value
-    //   equity/index/crypto → decimal fraction (dp/100); fmtChange multiplies by 100
-    const changeForStore = isFX ? changeAbs : changePct;
-
+  // ── 1. Finnhub — Mag 7 stocks ────────────────────────────────────────────
+  const fhEntries = Object.entries(FINNHUB_SYMBOLS);
+  await Promise.all(fhEntries.map(async ([id, sym]) => {
+    const q = await fetchFinnhubQuote(sym, apiKey);
+    if (!q) return;
+    const price     = q.c as number;
+    const changeAbs = q.d as number ?? 0;
+    const changePct = q.dp != null ? (q.dp as number) / 100 : 0;
     priceMap[id] = {
-      price:     parseFloat(price.toFixed(isFX ? 5 : isCrypto ? 0 : isIndex ? 2 : 4)),
+      price:     Math.round(price * 100) / 100,
       yield:     null,
-      change:    parseFloat(changeForStore.toFixed(isFX ? 5 : 6)),
-      changeAbs: parseFloat(changeAbs.toFixed(isFX ? 5 : 2)),
-      high52:    parseFloat(high52.toFixed(isFX ? 5 : 2)),
-      low52:     parseFloat(low52.toFixed(isFX ? 5 : 2)),
+      change:    changePct,
+      changeAbs: Math.round(changeAbs * 100) / 100,
+      high52:    Math.round(price * 1.08 * 100) / 100,
+      low52:     Math.round(price * 0.92 * 100) / 100,
       simulated: false,
       source:    "finnhub",
     };
-  });
+  }));
 
-  // ── 2. Yahoo Finance — batch fetch ───────────────────────────────────────
+  // ── 2. Yahoo v8 — everything else, fetched concurrently ──────────────────
   const yahooEntries = Object.entries(YAHOO_SYMBOLS).filter(([id]) => !SIMULATED_IDS.has(id));
-  const uniqueYahooSyms = Array.from(new Set(yahooEntries.map(([, s]) => s)));
 
-  const BATCH = 25;
-  const yahooData: Record<string, any> = {};
-  for (let i = 0; i < uniqueYahooSyms.length; i += BATCH) {
-    const batch = uniqueYahooSyms.slice(i, i + BATCH);
-    const result = await fetchYahooBatch(batch);
-    Object.assign(yahooData, result);
-  }
+  await Promise.all(yahooEntries.map(async ([id, sym]) => {
+    if (priceMap[id]) return; // already got from Finnhub
+    const q = await fetchYahooQuote(sym);
+    if (!q) return;
 
-  for (const [id, yahooSym] of yahooEntries) {
-    const q = yahooData[yahooSym];
-    if (!q) continue;
+    const { price, prevClose, high52, low52 } = q;
+    const chgAbs = price - prevClose;
+    const chgPct = prevClose > 0 ? chgAbs / prevClose : 0;
+    const { isFX, isCrypto, isIndex, isEquity, isCommodity, isTreasury, isBondETF } = classify(id);
 
-    const rawPrice: number  = q.regularMarketPrice         ?? 0;
-    const prevClose: number = q.regularMarketPreviousClose ?? rawPrice;
-    const high52: number    = q.fiftyTwoWeekHigh           ?? rawPrice * 1.1;
-    const low52: number     = q.fiftyTwoWeekLow            ?? rawPrice * 0.9;
-    const changeAbs: number = q.regularMarketChange        ?? 0;
-    const changePct: number = prevClose > 0 ? changeAbs / prevClose : 0;
-
-    if (TREASURY_YIELD_IDS.has(id)) {
-      // ^TNX etc. → price is yield × 10 (e.g. 42.78 = 4.278%)
-      const yld     = rawPrice  / 10;
+    if (isTreasury) {
+      // ^TNX etc: Yahoo stores yield×10 in the price field (42.78 = 4.278%)
+      const yld     = price    / 10;
       const prevYld = prevClose / 10;
       priceMap[id] = {
         price:     null,
-        yield:     parseFloat(yld.toFixed(3)),
-        change:    parseFloat((yld - prevYld).toFixed(3)),
+        yield:     Math.round(yld * 1000) / 1000,
+        change:    Math.round((yld - prevYld) * 1000) / 1000,
         changeAbs: null,
-        high52:    parseFloat((high52 / 10).toFixed(3)),
-        low52:     parseFloat((low52  / 10).toFixed(3)),
+        high52:    Math.round((high52 / 10) * 1000) / 1000,
+        low52:     Math.round((low52  / 10) * 1000) / 1000,
         simulated: false,
         source:    "yahoo",
       };
-    } else if (BOND_ETF_IDS.has(id)) {
+    } else if (isFX) {
       priceMap[id] = {
-        price:     parseFloat(rawPrice.toFixed(3)),
+        price:     Math.round(price * 100000) / 100000,
         yield:     null,
-        change:    parseFloat(changePct.toFixed(5)),
-        changeAbs: parseFloat(changeAbs.toFixed(3)),
-        high52:    parseFloat(high52.toFixed(3)),
-        low52:     parseFloat(low52.toFixed(3)),
+        change:    Math.round(chgAbs * 100000) / 100000,  // absolute pip
+        changeAbs: Math.round(chgAbs * 100000) / 100000,
+        high52:    Math.round(high52 * 100000) / 100000,
+        low52:     Math.round(low52  * 100000) / 100000,
         simulated: false,
         source:    "yahoo",
       };
-    } else {
-      // Indices, commodities
+    } else if (isCrypto) {
       priceMap[id] = {
-        price:     parseFloat(rawPrice.toFixed(2)),
+        price:     Math.round(price),
         yield:     null,
-        change:    parseFloat(changePct.toFixed(6)),
-        changeAbs: parseFloat(changeAbs.toFixed(2)),
-        high52:    parseFloat(high52.toFixed(2)),
-        low52:     parseFloat(low52.toFixed(2)),
+        change:    chgPct,
+        changeAbs: Math.round(chgAbs * 100) / 100,
+        high52:    Math.round(high52),
+        low52:     Math.round(low52),
+        simulated: false,
+        source:    "yahoo",
+      };
+    } else if (isCommodity) {
+      priceMap[id] = {
+        price:     Math.round(price * 100) / 100,
+        yield:     null,
+        change:    Math.round(chgAbs * 100) / 100,   // absolute $
+        changeAbs: Math.round(chgAbs * 100) / 100,
+        high52:    Math.round(high52 * 100) / 100,
+        low52:     Math.round(low52  * 100) / 100,
+        simulated: false,
+        source:    "yahoo",
+      };
+    } else if (isIndex || isEquity || isBondETF) {
+      priceMap[id] = {
+        price:     Math.round(price * 100) / 100,
+        yield:     null,
+        change:    chgPct,
+        changeAbs: Math.round(chgAbs * 100) / 100,
+        high52:    Math.round(high52 * 100) / 100,
+        low52:     Math.round(low52  * 100) / 100,
         simulated: false,
         source:    "yahoo",
       };
     }
-  }
+  }));
 
   cache = { data: priceMap, ts: Date.now() };
   return NextResponse.json(priceMap, { headers: { "Cache-Control": "public, max-age=60" } });
