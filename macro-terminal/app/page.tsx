@@ -1,66 +1,132 @@
 "use client";
 
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef } from "react";
 import INITIAL_DATA, { Contract, DataStore } from "./data/instruments";
+import { SIMULATED_IDS } from "./data/symbols";
 import { fmtPrice, fmtYield, fmtChange, rangeValue } from "./lib/format";
 
-// ─── LIVE PRICE SIMULATION ───────────────────────────────────────────────────
+// ─── HELPERS ─────────────────────────────────────────────────────────────────
 
 function deepClone<T>(x: T): T {
   return JSON.parse(JSON.stringify(x));
 }
 
-function useLivePrices(initial: DataStore) {
-  const [data, setData] = useState<DataStore>(deepClone(initial));
-  const [flashes, setFlashes] = useState<Record<string, "up" | "down">>({});
+// ─── YAHOO POLLING HOOK ───────────────────────────────────────────────────────
+// Polls /api/prices every 60 s. Merges real data into the data store.
+// Instruments not covered by Yahoo keep their previous value and get a
+// lightweight random simulation so the UI never looks frozen.
 
+function useLivePrices(initial: DataStore) {
+  const [data, setData]     = useState<DataStore>(deepClone(initial));
+  const [flashes, setFlashes] = useState<Record<string, "up" | "down">>({});
+  const [dataSource, setDataSource] = useState<"sim" | "live">("sim");
+  const prevPrices = useRef<Record<string, number>>({});
+
+  // ── 1. Poll Yahoo every 60 s ──────────────────────────────────────────────
   useEffect(() => {
-    const id = setInterval(() => {
-      const next: Record<string, "up" | "down"> = {};
-      setData(prev => {
-        const d = deepClone(prev);
-        Object.values(d).forEach(section => {
-          section.groups.forEach(group => {
-            group.contracts.forEach(c => {
-              if (Math.random() > 0.35) return;
-              const dir = Math.random() > 0.5 ? 1 : -1;
-              if (c.isFX) {
-                const delta = dir * Math.random() * 0.00012;
-                c.price = parseFloat(((c.price ?? 0) + delta).toFixed(5));
-                c.change += delta;
-              } else if (c.isEquity || c.isCrypto) {
-                const delta = dir * (c.price ?? 0) * Math.random() * 0.0005;
-                c.price = parseFloat(((c.price ?? 0) + delta).toFixed(2));
-                c.change += delta / (c.price ?? 1);
-                c.changeAbs = (c.changeAbs ?? 0) + delta;
-              } else if (c.isCommodity) {
-                const delta = dir * Math.random() * 0.08;
-                c.price = parseFloat(((c.price ?? 0) + delta).toFixed(3));
-                c.change += delta;
-              } else {
-                // rates / bonds / swaps
-                const delta = dir * Math.random() * 0.003;
-                if (c.yield !== null) {
-                  c.yield = parseFloat((c.yield + delta).toFixed(3));
-                  c.change += delta;
+    async function poll() {
+      try {
+        const res = await fetch("/api/prices");
+        if (!res.ok) return;
+        const yahoo: Record<string, {
+          price: number | null;
+          yield: number | null;
+          change: number;
+          changeAbs: number | null;
+          high52: number;
+          low52: number;
+          simulated: boolean;
+        }> = await res.json();
+
+        const newFlashes: Record<string, "up" | "down"> = {};
+
+        setData(prev => {
+          const next = deepClone(prev);
+          Object.values(next).forEach(section => {
+            section.groups.forEach(group => {
+              group.contracts.forEach((c: Contract) => {
+                const live = yahoo[c.id];
+                if (!live || live.simulated) return;
+
+                // Detect direction vs previous fetch
+                const key = c.id;
+                const prevVal = prevPrices.current[key];
+                const newVal = live.price ?? live.yield ?? 0;
+                if (prevVal !== undefined && newVal !== prevVal) {
+                  newFlashes[key] = newVal > prevVal ? "up" : "down";
                 }
-                if (c.price !== null) {
-                  c.price = parseFloat((c.price - delta * 8).toFixed(4));
-                }
-              }
-              next[c.id] = dir > 0 ? "up" : "down";
+                prevPrices.current[key] = newVal;
+
+                // Merge live data in
+                if (live.price  !== null) c.price  = live.price;
+                if (live.yield  !== null) c.yield  = live.yield;
+                c.change    = live.change;
+                c.high52    = live.high52;
+                c.low52     = live.low52;
+                if (live.changeAbs !== null) c.changeAbs = live.changeAbs;
+              });
             });
           });
+          return next;
         });
-        return d;
-      });
-      setFlashes(next);
-      setTimeout(() => setFlashes({}), 550);
-    }, 1100);
+
+        setFlashes(newFlashes);
+        setTimeout(() => setFlashes({}), 600);
+        setDataSource("live");
+      } catch (e) {
+        console.warn("Price poll failed, staying on last data", e);
+      }
+    }
+
+    poll(); // immediate on mount
+    const id = setInterval(poll, 60_000);
     return () => clearInterval(id);
   }, []);
 
-  return { data, flashes };
+  // ── 2. Simulate tick movement for SIM-only instruments ────────────────────
+  // Runs every 1.5 s but only touches instruments NOT covered by Yahoo
+  useEffect(() => {
+    const id = setInterval(() => {
+      const simFlashes: Record<string, "up" | "down"> = {};
+      setData(prev => {
+        const next = deepClone(prev);
+        Object.values(next).forEach(section => {
+          section.groups.forEach(group => {
+            group.contracts.forEach((c: Contract) => {
+              if (!SIMULATED_IDS.has(c.id)) return; // skip live instruments
+              if (Math.random() > 0.4) return;
+              const dir = Math.random() > 0.5 ? 1 : -1;
+              if (c.isFX) {
+                c.price = parseFloat(((c.price ?? 0) + dir * Math.random() * 0.00012).toFixed(5));
+                c.change += dir * 0.00008;
+              } else if (c.isEquity || c.isCrypto) {
+                const delta = dir * (c.price ?? 100) * Math.random() * 0.0004;
+                c.price = parseFloat(((c.price ?? 0) + delta).toFixed(2));
+                c.changeAbs = (c.changeAbs ?? 0) + delta;
+                c.change += delta / (c.price ?? 1);
+              } else if (c.isCommodity) {
+                c.price = parseFloat(((c.price ?? 0) + dir * Math.random() * 0.06).toFixed(3));
+                c.change += dir * 0.04;
+              } else {
+                // rates / bonds / swaps
+                const delta = dir * Math.random() * 0.002;
+                if (c.yield !== null) { c.yield = parseFloat((c.yield + delta).toFixed(3)); c.change += delta; }
+                if (c.price !== null) { c.price = parseFloat((c.price - delta * 8).toFixed(4)); }
+              }
+              simFlashes[c.id] = dir > 0 ? "up" : "down";
+            });
+          });
+        });
+        return next;
+      });
+      // merge sim flashes without wiping live flashes
+      setFlashes(prev => ({ ...prev, ...simFlashes }));
+      setTimeout(() => setFlashes({}), 550);
+    }, 1500);
+    return () => clearInterval(id);
+  }, []);
+
+  return { data, flashes, dataSource };
 }
 
 // ─── SPARKLINE ────────────────────────────────────────────────────────────────
@@ -326,7 +392,15 @@ function ContractRow({
       onClick={() => onChart(contract)}
       style={{ borderBottom: "1px solid #0a1520", cursor: "pointer" }}
     >
-      {cell(<span style={{ color: "#a8c4de", fontWeight: 600 }}>{contract.label}</span>, "left")}
+      {cell(
+        <span style={{ display: "flex", alignItems: "center", gap: 5 }}>
+          <span style={{ color: "#a8c4de", fontWeight: 600 }}>{contract.label}</span>
+          {SIMULATED_IDS.has(contract.id) && (
+            <span style={{ fontSize: 8, color: "#4a6a50", background: "rgba(34,100,60,0.18)", border: "1px solid #2a5a38", borderRadius: 2, padding: "0 3px", letterSpacing: 1 }}>SIM</span>
+          )}
+        </span>,
+        "left"
+      )}
       {cell(<span style={{ color: "#d8e8f4" }}>{fmtPrice(contract)}</span>)}
       {cell(<span style={{ color: "#8aaac8" }}>{fmtYield(contract)}</span>)}
       {cell(<span style={{ color: changeColor, fontWeight: 600 }}>{fmtChange(contract)}</span>)}
@@ -481,7 +555,7 @@ type TabId = typeof TABS[number]["id"];
 type Lookback = "1M" | "3M" | "6M";
 
 export default function Dashboard() {
-  const { data, flashes } = useLivePrices(INITIAL_DATA);
+  const { data, flashes, dataSource } = useLivePrices(INITIAL_DATA);
   const [tab, setTab]           = useState<TabId>("all");
   const [lookback, setLookback] = useState<Lookback>("3M");
   const [showTrend, setTrend]   = useState(true);
@@ -553,8 +627,15 @@ export default function Dashboard() {
 
         {/* live pill */}
         <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
-          <div style={{ width: 6, height: 6, borderRadius: "50%", background: "#22d3a5", boxShadow: "0 0 7px #22d3a5", animation: "pulse 2s infinite" }} />
-          <span style={{ color: "#22d3a5", fontSize: 10, letterSpacing: 1 }}>LIVE</span>
+          <div style={{
+            width: 6, height: 6, borderRadius: "50%",
+            background: dataSource === "live" ? "#22d3a5" : "#f0a500",
+            boxShadow: `0 0 7px ${dataSource === "live" ? "#22d3a5" : "#f0a500"}`,
+            animation: "pulse 2s infinite",
+          }} />
+          <span style={{ color: dataSource === "live" ? "#22d3a5" : "#f0a500", fontSize: 10, letterSpacing: 1 }}>
+            {dataSource === "live" ? "LIVE · 15m DELAY" : "CONNECTING..."}
+          </span>
         </div>
       </div>
 
@@ -589,7 +670,11 @@ export default function Dashboard() {
 
       {/* ── STATUS BAR ── */}
       <div style={{ height: 22, background: "#060d14", borderTop: "1px solid #0d1c2c", display: "flex", alignItems: "center", padding: "0 14px", gap: 14, flexShrink: 0 }}>
-        <span style={{ color: "#22d3a5", fontSize: 9, letterSpacing: 1 }}>● SIMULATED FEED — MOCK DATA</span>
+        <span style={{ color: dataSource === "live" ? "#22d3a5" : "#f0a500", fontSize: 9, letterSpacing: 1 }}>
+          {dataSource === "live" ? "● YAHOO FINANCE · 15 MIN DELAY" : "● CONNECTING TO YAHOO FINANCE..."}
+        </span>
+        <span style={{ color: "#0d1c2c" }}>|</span>
+        <span style={{ color: "#1e3448", fontSize: 9 }}>SIM = SIMULATED (SWAPS · RATE FUTURES · TTF)</span>
         <span style={{ color: "#0d1c2c" }}>|</span>
         <span style={{ color: "#1e3448", fontSize: 9 }}>INSTRUMENTS: {totalInstruments}</span>
         <span style={{ color: "#0d1c2c" }}>|</span>
