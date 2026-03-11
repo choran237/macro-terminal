@@ -1,0 +1,56 @@
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html,
+body {
+  background: #060d16;
+  color: #c8d8e8;
+  font-family: "Courier New", Courier, monospace;
+  overflow: hidden;
+}
+
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: #060d16;
+}
+::-webkit-scrollbar-thumb {
+  background: #1a2e44;
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #2a4060;
+}
+
+@keyframes ticker {
+  from { transform: translateX(0); }
+  to   { transform: translateX(-50%); }
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0.35; }
+}
+
+@keyframes flashUp {
+  0%   { background-color: rgba(34, 211, 165, 0.22); }
+  100% { background-color: transparent; }
+}
+
+@keyframes flashDown {
+  0%   { background-color: rgba(244, 91, 91, 0.22); }
+  100% { background-color: transparent; }
+}
+
+.flash-up   { animation: flashUp   0.6s ease-out forwards; }
+.flash-down { animation: flashDown 0.6s ease-out forwards; }
+
+tr.row-hover:hover td {
+  background: rgba(34, 211, 165, 0.04) !important;
+  cursor: pointer;
+}
