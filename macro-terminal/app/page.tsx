@@ -174,131 +174,139 @@ function RangeBar({ value, low, high }: { value: number; low: number; high: numb
 // ─── CHART MODAL ─────────────────────────────────────────────────────────────
 
 type ChartMode = "3d" | "30d" | "6m";
+interface ChartPoint { t: number; o: number; h: number; l: number; c: number; v: number; }
+
+function drawChart(canvas: HTMLCanvasElement, points: ChartPoint[], simulated: boolean) {
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return;
+  const W = canvas.width, H = canvas.height;
+  ctx.clearRect(0, 0, W, H);
+
+  if (points.length === 0) {
+    ctx.fillStyle = "#3d5a78";
+    ctx.font = "12px 'Courier New', monospace";
+    ctx.textAlign = "center";
+    ctx.fillText(simulated ? "SIMULATED — NO REAL DATA FOR THIS INSTRUMENT" : "NO DATA AVAILABLE", W / 2, H / 2);
+    return;
+  }
+
+  const closes = points.map(p => p.c);
+  const minV = Math.min(...closes), maxV = Math.max(...closes);
+  const pad = { t: 18, b: 36, l: 62, r: 14 };
+  const cW = W - pad.l - pad.r, cH = H - pad.t - pad.b;
+
+  // Grid lines + Y labels
+  ctx.strokeStyle = "#0e1e2e";
+  ctx.lineWidth = 1;
+  for (let i = 0; i <= 5; i++) {
+    const y = pad.t + (i / 5) * cH;
+    ctx.beginPath(); ctx.moveTo(pad.l, y); ctx.lineTo(W - pad.r, y); ctx.stroke();
+    const val = maxV - (i / 5) * (maxV - minV);
+    ctx.fillStyle = "#3d5a78";
+    ctx.font = "10px 'Courier New', monospace";
+    ctx.textAlign = "right";
+    ctx.fillText(val < 10 ? val.toFixed(3) : val.toFixed(2), pad.l - 5, y + 3.5);
+  }
+
+  // X axis labels
+  const xCount = Math.min(4, points.length);
+  for (let i = 0; i < xCount; i++) {
+    const idx = Math.floor((i / (xCount - 1)) * (points.length - 1));
+    const x = pad.l + (idx / (points.length - 1)) * cW;
+    const d = new Date(points[idx].t);
+    const lbl = `${d.getDate()}/${d.getMonth() + 1}`;
+    ctx.fillStyle = "#3d5a78";
+    ctx.font = "10px 'Courier New', monospace";
+    ctx.textAlign = "center";
+    ctx.fillText(lbl, x, H - 6);
+  }
+
+  const toY = (v: number) => pad.t + (1 - (v - minV) / (maxV - minV || 1)) * cH;
+  const toX = (i: number) => pad.l + (i / (points.length - 1)) * cW;
+
+  // Gradient fill
+  const grad = ctx.createLinearGradient(0, pad.t, 0, H - pad.b);
+  grad.addColorStop(0, "rgba(34,211,165,0.15)");
+  grad.addColorStop(1, "rgba(34,211,165,0.01)");
+  ctx.beginPath();
+  closes.forEach((c, i) => i === 0 ? ctx.moveTo(toX(i), toY(c)) : ctx.lineTo(toX(i), toY(c)));
+  ctx.lineTo(toX(closes.length - 1), H - pad.b);
+  ctx.lineTo(pad.l, H - pad.b);
+  ctx.closePath();
+  ctx.fillStyle = grad;
+  ctx.fill();
+
+  // Price line
+  ctx.beginPath();
+  ctx.strokeStyle = simulated ? "#f0a500" : "#22d3a5";
+  ctx.lineWidth = 1.5;
+  closes.forEach((c, i) => i === 0 ? ctx.moveTo(toX(i), toY(c)) : ctx.lineTo(toX(i), toY(c)));
+  ctx.stroke();
+
+  // SIM watermark
+  if (simulated) {
+    ctx.fillStyle = "rgba(240,165,0,0.08)";
+    ctx.font = "bold 28px 'Courier New', monospace";
+    ctx.textAlign = "center";
+    ctx.fillText("SIMULATED", W / 2, H / 2);
+  }
+}
 
 function ChartModal({ contract, onClose }: { contract: Contract; onClose: () => void }) {
   const [mode, setMode] = useState<ChartMode>("30d");
+  const [loading, setLoading] = useState(true);
+  const [points, setPoints] = useState<ChartPoint[]>([]);
+  const [simulated, setSimulated] = useState(false);
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
+  // Fetch real chart data
   useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
-    const W = canvas.width, H = canvas.height;
-    ctx.clearRect(0, 0, W, H);
+    setLoading(true);
+    fetch(`/api/chart?id=${contract.id}&mode=${mode}`)
+      .then(r => r.json())
+      .then(d => {
+        setPoints(d.points ?? []);
+        setSimulated(d.simulated ?? false);
+      })
+      .catch(() => setSimulated(true))
+      .finally(() => setLoading(false));
+  }, [contract.id, mode]);
 
-    const seed = contract.id.charCodeAt(0) + contract.id.charCodeAt(1);
-    const points = mode === "3d" ? 288 : mode === "30d" ? 600 : 180;
-    const raw: number[] = [];
-    let v = rangeValue(contract);
-    for (let i = 0; i < points; i++) {
-      v += Math.sin(i * 0.07 + seed * 0.1) * 0.25 + (Math.random() - 0.497) * 0.35;
-      raw.push(v);
-    }
-    const minV = Math.min(...raw), maxV = Math.max(...raw);
-    const pad = { t: 18, b: 36, l: 58, r: 14 };
-    const cW = W - pad.l - pad.r, cH = H - pad.t - pad.b;
-
-    // background grid lines
-    ctx.strokeStyle = "#0e1e2e";
-    ctx.lineWidth = 1;
-    for (let i = 0; i <= 5; i++) {
-      const y = pad.t + (i / 5) * cH;
-      ctx.beginPath(); ctx.moveTo(pad.l, y); ctx.lineTo(W - pad.r, y); ctx.stroke();
-      const val = maxV - (i / 5) * (maxV - minV);
-      ctx.fillStyle = "#3d5a78";
-      ctx.font = "10px 'Courier New', monospace";
-      ctx.textAlign = "right";
-      ctx.fillText(val.toFixed(3), pad.l - 5, y + 3.5);
-    }
-
-    // x-axis labels
-    const xLabels = mode === "3d" ? ["3D", "2D", "1D", "NOW"] : mode === "30d" ? ["30D", "20D", "10D", "NOW"] : ["6M", "4M", "2M", "NOW"];
-    xLabels.forEach((lbl, i) => {
-      const x = pad.l + (i / 3) * cW;
-      ctx.fillStyle = "#3d5a78";
-      ctx.font = "10px 'Courier New', monospace";
-      ctx.textAlign = "center";
-      ctx.fillText(lbl, x, H - 6);
-    });
-
-    // gradient fill
-    const grad = ctx.createLinearGradient(0, pad.t, 0, H - pad.b);
-    grad.addColorStop(0, "rgba(34,211,165,0.14)");
-    grad.addColorStop(1, "rgba(34,211,165,0.01)");
-
-    const toXY = (i: number, val: number) => ({
-      x: pad.l + (i / (raw.length - 1)) * cW,
-      y: pad.t + (1 - (val - minV) / (maxV - minV || 1)) * cH,
-    });
-
-    ctx.beginPath();
-    raw.forEach((d, i) => {
-      const { x, y } = toXY(i, d);
-      i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
-    });
-    const last = toXY(raw.length - 1, raw[raw.length - 1]);
-    ctx.lineTo(last.x, H - pad.b);
-    ctx.lineTo(pad.l, H - pad.b);
-    ctx.closePath();
-    ctx.fillStyle = grad;
-    ctx.fill();
-
-    // line
-    ctx.beginPath();
-    ctx.strokeStyle = "#22d3a5";
-    ctx.lineWidth = 1.5;
-    raw.forEach((d, i) => {
-      const { x, y } = toXY(i, d);
-      i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
-    });
-    ctx.stroke();
-  }, [mode, contract]);
-
-  const positive = contract.change >= 0;
+  // Draw whenever data or canvas changes
+  useEffect(() => {
+    if (!canvasRef.current || loading) return;
+    drawChart(canvasRef.current, points, simulated);
+  }, [points, simulated, loading]);
 
   return (
-    <div
-      onClick={onClose}
-      style={{ position: "fixed", inset: 0, background: "rgba(0,5,12,0.88)", zIndex: 1000, display: "flex", alignItems: "center", justifyContent: "center" }}
-    >
-      <div
-        onClick={e => e.stopPropagation()}
-        style={{ background: "#090f1a", border: "1px solid #172438", borderRadius: 8, padding: "20px 24px", width: 700, maxWidth: "94vw" }}
-      >
+    <div onClick={onClose} style={{ position: "fixed", inset: 0, background: "rgba(0,5,12,0.88)", zIndex: 1000, display: "flex", alignItems: "center", justifyContent: "center" }}>
+      <div onClick={e => e.stopPropagation()} style={{ background: "#090f1a", border: "1px solid #172438", borderRadius: 8, padding: "20px 24px", width: 700, maxWidth: "94vw" }}>
         {/* header */}
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16 }}>
           <div style={{ display: "flex", alignItems: "baseline", gap: 10 }}>
             <span style={{ color: "#22d3a5", fontSize: 15, fontWeight: 700, letterSpacing: 3 }}>{contract.label}</span>
             <span style={{ color: "#2e4a6a", fontSize: 11 }}>{contract.id}</span>
+            {simulated && <span style={{ color: "#f0a500", fontSize: 10, border: "1px solid #f0a500", borderRadius: 2, padding: "1px 5px" }}>SIM</span>}
           </div>
           <div style={{ display: "flex", gap: 6 }}>
             {(["3d", "30d", "6m"] as ChartMode[]).map(m => (
-              <button
-                key={m}
-                onClick={() => setMode(m)}
-                style={{
-                  padding: "3px 10px", borderRadius: 3,
-                  border: `1px solid ${mode === m ? "#22d3a5" : "#172438"}`,
-                  background: mode === m ? "rgba(34,211,165,0.1)" : "transparent",
-                  color: mode === m ? "#22d3a5" : "#3d5a78",
-                  fontFamily: "'Courier New', monospace", fontSize: 11, cursor: "pointer", letterSpacing: 1,
-                }}
-              >
+              <button key={m} onClick={() => setMode(m)} style={{ padding: "3px 10px", borderRadius: 3, border: `1px solid ${mode === m ? "#22d3a5" : "#172438"}`, background: mode === m ? "rgba(34,211,165,0.1)" : "transparent", color: mode === m ? "#22d3a5" : "#3d5a78", fontFamily: "'Courier New', monospace", fontSize: 11, cursor: "pointer", letterSpacing: 1 }}>
                 {m.toUpperCase()}
               </button>
             ))}
-            <button
-              onClick={onClose}
-              style={{ padding: "3px 10px", borderRadius: 3, border: "1px solid #172438", background: "transparent", color: "#3d5a78", fontFamily: "'Courier New', monospace", fontSize: 11, cursor: "pointer" }}
-            >
-              ✕ CLOSE
-            </button>
+            <button onClick={onClose} style={{ padding: "3px 10px", borderRadius: 3, border: "1px solid #172438", background: "transparent", color: "#3d5a78", fontFamily: "'Courier New', monospace", fontSize: 11, cursor: "pointer" }}>✕</button>
           </div>
         </div>
 
         {/* canvas */}
-        <canvas ref={canvasRef} width={652} height={260} style={{ width: "100%", display: "block" }} />
+        <div style={{ position: "relative" }}>
+          <canvas ref={canvasRef} width={652} height={260} style={{ width: "100%", display: "block" }} />
+          {loading && (
+            <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", background: "rgba(9,15,26,0.7)" }}>
+              <span style={{ color: "#22d3a5", fontFamily: "monospace", fontSize: 12, letterSpacing: 2 }}>LOADING...</span>
+            </div>
+          )}
+        </div>
 
         {/* stats */}
         <div style={{ display: "flex", justifyContent: "space-around", marginTop: 14, paddingTop: 14, borderTop: "1px solid #0e1e30" }}>
@@ -308,10 +316,11 @@ function ChartModal({ contract, onClose }: { contract: Contract; onClose: () => 
             ["CHG",    fmtChange(contract)],
             ["52W HI", contract.high52 < 10 ? contract.high52.toFixed(3) : contract.high52.toFixed(2)],
             ["52W LO", contract.low52  < 10 ? contract.low52.toFixed(3)  : contract.low52.toFixed(2)],
+            ["SOURCE", simulated ? "SIM" : "LIVE"],
           ].map(([k, v]) => (
             <div key={k} style={{ textAlign: "center" }}>
               <div style={{ color: "#2e4a6a", fontSize: 9, letterSpacing: 1, marginBottom: 3 }}>{k}</div>
-              <div style={{ color: "#c8d8e8", fontSize: 12, fontFamily: "'Courier New', monospace" }}>{v}</div>
+              <div style={{ color: k === "SOURCE" ? (simulated ? "#f0a500" : "#22d3a5") : "#c8d8e8", fontSize: 12, fontFamily: "'Courier New', monospace" }}>{v}</div>
             </div>
           ))}
         </div>
