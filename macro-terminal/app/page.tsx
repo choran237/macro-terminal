@@ -2,8 +2,30 @@
 
 import { useState, useEffect, useRef } from "react";
 import INITIAL_DATA, { Contract, DataStore } from "./data/instruments";
-import { SIMULATED_IDS } from "./data/symbols";
+import { SIMULATED_IDS, YAHOO_SYMBOLS, TREASURY_YIELD_IDS, FINNHUB_SYMBOLS } from "./data/symbols";
 import { fmtPrice, fmtYield, fmtChange, rangeValue } from "./lib/format";
+
+// ── Fetch latest price directly from Yahoo chart (client-side, same as chart modal) ──
+async function fetchYahooPrice(yahooSymbol: string): Promise<{
+  price: number; prevClose: number; high52: number; low52: number;
+} | null> {
+  try {
+    const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(yahooSymbol)}?interval=1d&range=5d&includePrePost=false`;
+    const res = await fetch(url);
+    if (!res.ok) return null;
+    const json = await res.json();
+    const result = json?.chart?.result?.[0];
+    if (!result) return null;
+    const closes = (result.indicators?.quote?.[0]?.close ?? []).filter((c: any) => c != null) as number[];
+    if (closes.length === 0) return null;
+    const meta      = result.meta ?? {};
+    const price     = closes[closes.length - 1];
+    const prevClose = closes.length > 1 ? closes[closes.length - 2] : price;
+    const high52    = (meta.fiftyTwoWeekHigh ?? price * 1.1) as number;
+    const low52     = (meta.fiftyTwoWeekLow  ?? price * 0.9) as number;
+    return { price, prevClose, high52, low52 };
+  } catch { return null; }
+}
 
 // ─── HELPERS ─────────────────────────────────────────────────────────────────
 
@@ -17,83 +39,119 @@ function deepClone<T>(x: T): T {
 // lightweight random simulation so the UI never looks frozen.
 
 function useLivePrices(initial: DataStore) {
-  const [data, setData]     = useState<DataStore>(deepClone(initial));
+  const [data, setData]       = useState<DataStore>(deepClone(initial));
   const [flashes, setFlashes] = useState<Record<string, "up" | "down">>({});
   const [dataSource, setDataSource] = useState<"sim" | "live">("sim");
   const prevPrices = useRef<Record<string, number>>({});
 
-  // ── 1. Poll Yahoo every 60 s ──────────────────────────────────────────────
+  // ── Merge a price result into the data store ──────────────────────────────
+  function applyPrice(
+    id: string,
+    price: number | null,
+    yld: number | null,
+    change: number,
+    changeAbs: number | null,
+    high52: number,
+    low52: number,
+  ) {
+    const newVal = price ?? yld ?? 0;
+    const prev   = prevPrices.current[id];
+    const flash  = prev !== undefined && newVal !== prev
+      ? (newVal > prev ? "up" : "down") as "up" | "down"
+      : undefined;
+    prevPrices.current[id] = newVal;
+
+    setData(prev => {
+      const next = deepClone(prev);
+      Object.values(next).forEach((section: any) =>
+        section.groups.forEach((group: any) =>
+          group.contracts.forEach((c: Contract) => {
+            if (c.id !== id) return;
+            if (price     !== null) c.price     = price;
+            if (yld       !== null) c.yield     = yld;
+            c.change  = change;
+            c.high52  = high52;
+            c.low52   = low52;
+            if (changeAbs !== null) c.changeAbs = changeAbs;
+          })
+        )
+      );
+      return next;
+    });
+    if (flash) {
+      setFlashes(prev => ({ ...prev, [id]: flash }));
+      setTimeout(() => setFlashes(prev => { const n = { ...prev }; delete n[id]; return n; }), 600);
+    }
+  }
+
+  // ── 1. Finnhub — Mag 7 (server-side, avoids CORS) ────────────────────────
   useEffect(() => {
-    async function poll() {
+    async function pollFinnhub() {
       try {
         const res = await fetch("/api/prices");
         if (!res.ok) return;
-        const yahoo: Record<string, {
-          price: number | null;
-          yield: number | null;
-          change: number;
-          changeAbs: number | null;
-          high52: number;
-          low52: number;
-          simulated: boolean;
-        }> = await res.json();
-
-        const newFlashes: Record<string, "up" | "down"> = {};
-
-        setData(prev => {
-          const next = deepClone(prev);
-          Object.values(next).forEach(section => {
-            section.groups.forEach(group => {
-              group.contracts.forEach((c: Contract) => {
-                const live = yahoo[c.id];
-                if (!live || live.simulated) return;
-
-                // Detect direction vs previous fetch
-                const key = c.id;
-                const prevVal = prevPrices.current[key];
-                const newVal = live.price ?? live.yield ?? 0;
-                if (prevVal !== undefined && newVal !== prevVal) {
-                  newFlashes[key] = newVal > prevVal ? "up" : "down";
-                }
-                prevPrices.current[key] = newVal;
-
-                // Merge live data in
-                if (live.price  !== null) c.price  = live.price;
-                if (live.yield  !== null) c.yield  = live.yield;
-                c.change    = live.change;
-                c.high52    = live.high52;
-                c.low52     = live.low52;
-                if (live.changeAbs !== null) c.changeAbs = live.changeAbs;
-              });
-            });
-          });
-          return next;
+        const map: Record<string, any> = await res.json();
+        Object.entries(map).forEach(([id, live]: [string, any]) => {
+          if (!live || live.simulated) return;
+          applyPrice(id, live.price, live.yield, live.change, live.changeAbs, live.high52, live.low52);
+          setDataSource("live");
         });
-
-        setFlashes(newFlashes);
-        setTimeout(() => setFlashes({}), 600);
-        setDataSource("live");
-      } catch (e) {
-        console.warn("Price poll failed, staying on last data", e);
-      }
+      } catch {}
     }
-
-    poll(); // immediate on mount
-    const id = setInterval(poll, 60_000);
+    pollFinnhub();
+    const id = setInterval(pollFinnhub, 60_000);
     return () => clearInterval(id);
   }, []);
 
-  // ── 2. Simulate tick movement for SIM-only instruments ────────────────────
-  // Runs every 1.5 s but only touches instruments NOT covered by Yahoo
+  // ── 2. Yahoo — fetched client-side (browser → Yahoo, no server involved) ──
+  useEffect(() => {
+    const isFX        = (id: string) => ["EURUSD","GBPUSD","USDJPY","USDCHF","AUDUSD","USDCAD","NZDUSD","EURGBP"].includes(id);
+    const isCrypto    = (id: string) => ["BTC","ETH"].includes(id);
+    const isCommodity = (id: string) => ["CL2","GC","SI","HG"].includes(id);
+
+    async function pollYahoo() {
+      const entries = Object.entries(YAHOO_SYMBOLS).filter(([id]) => !SIMULATED_IDS.has(id));
+      await Promise.all(entries.map(async ([id, sym]) => {
+        const q = await fetchYahooPrice(sym);
+        if (!q) return;
+        const { price, prevClose, high52, low52 } = q;
+        const chgAbs = price - prevClose;
+        const chgPct = prevClose > 0 ? chgAbs / prevClose : 0;
+
+        if (TREASURY_YIELD_IDS.has(id)) {
+          // Yahoo yields are stored ×10 in the close (42.78 = 4.278%)
+          const yld     = price    / 10;
+          const prevYld = prevClose / 10;
+          applyPrice(id, null, Math.round(yld*1000)/1000, Math.round((yld-prevYld)*1000)/1000, null, Math.round(high52/10*1000)/1000, Math.round(low52/10*1000)/1000);
+        } else if (isFX(id)) {
+          applyPrice(id, Math.round(price*100000)/100000, null, Math.round(chgAbs*100000)/100000, Math.round(chgAbs*100000)/100000, Math.round(high52*100000)/100000, Math.round(low52*100000)/100000);
+        } else if (isCrypto(id)) {
+          applyPrice(id, Math.round(price), null, chgPct, Math.round(chgAbs*100)/100, Math.round(high52), Math.round(low52));
+        } else if (isCommodity(id)) {
+          applyPrice(id, Math.round(price*100)/100, null, Math.round(chgAbs*100)/100, Math.round(chgAbs*100)/100, Math.round(high52*100)/100, Math.round(low52*100)/100);
+        } else {
+          // indices, bond ETFs
+          applyPrice(id, Math.round(price*100)/100, null, chgPct, Math.round(chgAbs*100)/100, Math.round(high52*100)/100, Math.round(low52*100)/100);
+        }
+        setDataSource("live");
+      }));
+    }
+
+    pollYahoo();
+    const id = setInterval(pollYahoo, 60_000);
+    return () => clearInterval(id);
+  }, []);
+
+  // ── 3. Simulate tick for SIM-only instruments ─────────────────────────────
   useEffect(() => {
     const id = setInterval(() => {
       const simFlashes: Record<string, "up" | "down"> = {};
       setData(prev => {
         const next = deepClone(prev);
-        Object.values(next).forEach(section => {
-          section.groups.forEach(group => {
+        Object.values(next).forEach((section: any) => {
+          section.groups.forEach((group: any) => {
             group.contracts.forEach((c: Contract) => {
-              if (!SIMULATED_IDS.has(c.id)) return; // skip live instruments
+              if (!SIMULATED_IDS.has(c.id)) return;
               if (Math.random() > 0.4) return;
               const dir = Math.random() > 0.5 ? 1 : -1;
               if (c.isFX) {
@@ -105,13 +163,12 @@ function useLivePrices(initial: DataStore) {
                 c.changeAbs = (c.changeAbs ?? 0) + delta;
                 c.change += delta / (c.price ?? 1);
               } else if (c.isCommodity) {
-                c.price = parseFloat(((c.price ?? 0) + dir * Math.random() * 0.06).toFixed(3));
+                c.price = parseFloat(((c.price ?? 0) + dir * Math.random() * 0.06).toFixed(2));
                 c.change += dir * 0.04;
               } else {
-                // rates / bonds / swaps
                 const delta = dir * Math.random() * 0.002;
-                if (c.yield !== null) { c.yield = parseFloat((c.yield + delta).toFixed(3)); c.change += delta; }
-                if (c.price !== null) { c.price = parseFloat((c.price - delta * 8).toFixed(4)); }
+                if (c.yield !== null) { c.yield = parseFloat(((c.yield ?? 0) + delta).toFixed(3)); c.change += delta; }
+                if (c.price !== null) { c.price = parseFloat(((c.price ?? 0) - delta * 8).toFixed(4)); }
               }
               simFlashes[c.id] = dir > 0 ? "up" : "down";
             });
@@ -119,7 +176,6 @@ function useLivePrices(initial: DataStore) {
         });
         return next;
       });
-      // merge sim flashes without wiping live flashes
       setFlashes(prev => ({ ...prev, ...simFlashes }));
       setTimeout(() => setFlashes({}), 550);
     }, 1500);
@@ -128,7 +184,6 @@ function useLivePrices(initial: DataStore) {
 
   return { data, flashes, dataSource };
 }
-
 // ─── SPARKLINE ────────────────────────────────────────────────────────────────
 
 // Global sparkline cache so we don't re-fetch on every render
